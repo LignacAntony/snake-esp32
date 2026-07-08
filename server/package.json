@@ -1,0 +1,13 @@
+{
+  "name": "snake-server",
+  "version": "1.0.0",
+  "description": "WebSocket server that streams keyboard input to the Snake ESP32",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "ws": "^8.21.0"
+  }
+}

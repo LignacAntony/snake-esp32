@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  arduino:
+    name: Compile ESP32 sketch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create secrets.h from example
+        run: cp snake_client/secrets.h.example snake_client/secrets.h
+      - uses: arduino/compile-sketches@v1
+        with:
+          fqbn: "esp32:esp32:esp32s3:USBMode=hwcdc,CDCOnBoot=cdc,FlashSize=16M,PSRAM=opi"
+          platforms: |
+            - name: esp32:esp32
+              source-url: https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          libraries: |
+            - name: Adafruit SSD1306
+            - name: Adafruit GFX Library
+            - name: WebSockets
+          sketch-paths: |
+            - snake_client
+
+  server:
+    name: Check Node server
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: Install dependencies
+        working-directory: server
+        run: npm ci
+      - name: Syntax check
+        working-directory: server
+        run: node --check server.js
