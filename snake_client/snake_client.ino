@@ -106,14 +106,14 @@ void moveSnake(Snake& snake, int newX, int newY) {
 
 void gameTick() {
   if (gameEnded()) return;
-
+  //applique la direction
   player1.dirX = player1.nextDirX; player1.dirY = player1.nextDirY;
   if (twoPlayers) { player2.dirX = player2.nextDirX; player2.dirY = player2.nextDirY; }
-
+  //calcule où vont les têtes
   int head1X, head1Y, head2X = 0, head2Y = 0;
   bool head1Valid = headOf(player1, head1X, head1Y);
   bool head2Valid = twoPlayers ? headOf(player2, head2X, head2Y) : false;
-
+  //mort à cause du mur
   bool player1Dies = !head1Valid;
   bool player2Dies = twoPlayers && !head2Valid;
 
@@ -128,10 +128,10 @@ void gameTick() {
     if (hitsSnake(player1, head2X, head2Y, false)) player2Dies = true;
   }
   if (twoPlayers && head1Valid && head2Valid && head1X == head2X && head1Y == head2Y) { player1Dies = true; player2Dies = true; }
-
+  //enregistre qui meur
   if (player1Dies) player1.dead = true;
   if (twoPlayers && player2Dies) player2.dead = true;
-
+  // dernier mouvement pour le snake survivant
   if (!player1.dead) moveSnake(player1, head1X, head1Y);
   if (twoPlayers && !player2.dead) moveSnake(player2, head2X, head2Y);
 }
