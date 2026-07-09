@@ -54,10 +54,9 @@ function broadcast(dir) {
 }
 
 const keys = {
-  up: 'up', z: 'up',
-  down: 'down', s: 'down',
-  left: 'left', q: 'left',
-  right: 'right', d: 'right',
+  up: '1:up', down: '1:down', left: '1:left', right: '1:right',
+  z: '2:up', s: '2:down', q: '2:left', d: '2:right',
+  space: 'start', return: 'start',
 };
 
 readline.emitKeypressEvents(process.stdin);

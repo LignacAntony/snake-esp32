@@ -4,6 +4,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include "secrets.h"
+#include <Fonts/TomThumb.h>
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -19,90 +20,205 @@ const char* ssid = WIFI_SSID;
 const char* password = WIFI_PASSWORD;
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
-WebSocketsClient ws;
+WebSocketsClient webSocket;
 bool connected = false;
 
-uint8_t snakeX[MAX_LEN], snakeY[MAX_LEN];
-int snakeLen, dirX, dirY, nextDirX, nextDirY;
+struct Snake {
+  uint8_t bodyX[MAX_LEN], bodyY[MAX_LEN];
+  int length;
+  int dirX, dirY, nextDirX, nextDirY; //current dir / next dir
+  bool dead;
+};
+
+Snake player1;
+Snake player2;
+bool twoPlayers = false;
+bool inMenu = true;
+int menuSelection = 0;
 uint8_t foodX, foodY;
-bool gameOver;
 unsigned long lastTick = 0;
 const unsigned long TICK_MS = 180;
+bool noWalls = false;
 
+bool cellOnSnake(Snake& snake, uint8_t cellX, uint8_t cellY) {
+  for (int i = 0; i < snake.length; i++)
+    if (snake.bodyX[i] == cellX && snake.bodyY[i] == cellY) return true;
+  return false;
+}
+
+//place la nourriture du snake aléatoirement sur une case.
 void placeFood() {
   while (true) {
-    uint8_t fx = random(GRID_W);
-    uint8_t fy = random(GRID_H);
-    bool onSnake = false;
-    for (int i = 0; i < snakeLen; i++)
-      if (snakeX[i] == fx && snakeY[i] == fy) { onSnake = true; break; }
-    if (!onSnake) { foodX = fx; foodY = fy; return; }
+    uint8_t candidateX = random(GRID_W);
+    uint8_t candidateY = random(GRID_H);
+    if (cellOnSnake(player1, candidateX, candidateY)) continue;
+    if (twoPlayers && cellOnSnake(player2, candidateX, candidateY)) continue;
+    foodX = candidateX; foodY = candidateY; return;
   }
+}
+
+void resetSnake(Snake& snake, int startX, int startY, int startDirX) {
+  snake.length = 3;
+  for (int i = 0; i < snake.length; i++) { snake.bodyX[i] = startX - i * startDirX; snake.bodyY[i] = startY; }
+  snake.dirX = startDirX; snake.dirY = 0;
+  snake.nextDirX = startDirX; snake.nextDirY = 0;
+  snake.dead = false;
 }
 
 void resetGame() {
-  snakeLen = 3;
-  int cx = GRID_W / 2, cy = GRID_H / 2;
-  for (int i = 0; i < snakeLen; i++) { snakeX[i] = cx - i; snakeY[i] = cy; }
-  dirX = 1; dirY = 0;
-  nextDirX = 1; nextDirY = 0;
-  gameOver = false;
+  resetSnake(player1, GRID_W / 4, GRID_H / 2, 1);
+  if (twoPlayers) resetSnake(player2, 3 * GRID_W / 4, GRID_H / 2, -1);
   placeFood();
 }
 
-void setDirection(int dx, int dy) {
-  if (dx == -dirX && dy == -dirY) return;
-  nextDirX = dx; nextDirY = dy;
+void setDirection(Snake& snake, int dx, int dy) {
+  if (dx == -snake.dirX && dy == -snake.dirY) return;
+  snake.nextDirX = dx; snake.nextDirY = dy;
 }
 
-void update() {
-  if (gameOver) return;
-  dirX = nextDirX; dirY = nextDirY;
-  int nx = snakeX[0] + dirX;
-  int ny = snakeY[0] + dirY;
-  if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) { gameOver = true; return; }
-
-  bool ate = nx == foodX && ny == foodY;
-  for (int i = 0; i < snakeLen; i++) {
-    if (!ate && i == snakeLen - 1) continue;
-    if (snakeX[i] == nx && snakeY[i] == ny) { gameOver = true; return; }
+//calcule le déplacement de la tête
+bool headOf(Snake& snake, int& newX, int& newY) {
+  newX = snake.bodyX[0] + snake.dirX;
+  newY = snake.bodyY[0] + snake.dirY;
+  if (noWalls) {
+    newX = (newX + GRID_W) % GRID_W;
+    newY = (newY + GRID_H) % GRID_H;
+    return true;
   }
-
-  if (ate && snakeLen < MAX_LEN) snakeLen++;
-  for (int i = snakeLen - 1; i > 0; i--) { snakeX[i] = snakeX[i - 1]; snakeY[i] = snakeY[i - 1]; }
-  snakeX[0] = nx; snakeY[0] = ny;
-  if (ate) placeFood();
+  return !(newX < 0 || newX >= GRID_W || newY < 0 || newY >= GRID_H);
 }
 
+bool hitsSnake(Snake& snake, int cellX, int cellY, bool skipTail) {
+  for (int i = 0; i < snake.length; i++) {
+    if (skipTail && i == snake.length - 1) continue;
+    if (snake.bodyX[i] == cellX && snake.bodyY[i] == cellY) return true;
+  }
+  return false;
+}
+
+void moveSnake(Snake& snake, int newX, int newY) {
+  bool ateFood = newX == foodX && newY == foodY;
+  if (ateFood && snake.length < MAX_LEN) snake.length++;
+  for (int i = snake.length - 1; i > 0; i--) { snake.bodyX[i] = snake.bodyX[i - 1]; snake.bodyY[i] = snake.bodyY[i - 1]; }
+  snake.bodyX[0] = newX; snake.bodyY[0] = newY;
+  if (ateFood) placeFood();
+}
+
+void gameTick() {
+  if (gameEnded()) return;
+
+  player1.dirX = player1.nextDirX; player1.dirY = player1.nextDirY;
+  if (twoPlayers) { player2.dirX = player2.nextDirX; player2.dirY = player2.nextDirY; }
+
+  int head1X, head1Y, head2X = 0, head2Y = 0;
+  bool head1Valid = headOf(player1, head1X, head1Y);
+  bool head2Valid = twoPlayers ? headOf(player2, head2X, head2Y) : false;
+
+  bool player1Dies = !head1Valid;
+  bool player2Dies = twoPlayers && !head2Valid;
+
+  if (!player1Dies) {
+    bool player1Ate = head1X == foodX && head1Y == foodY;
+    if (hitsSnake(player1, head1X, head1Y, !player1Ate)) player1Dies = true;
+    if (twoPlayers && hitsSnake(player2, head1X, head1Y, false)) player1Dies = true;
+  }
+  if (twoPlayers && !player2Dies) {
+    bool player2Ate = head2X == foodX && head2Y == foodY;
+    if (hitsSnake(player2, head2X, head2Y, !player2Ate)) player2Dies = true;
+    if (hitsSnake(player1, head2X, head2Y, false)) player2Dies = true;
+  }
+  if (twoPlayers && head1Valid && head2Valid && head1X == head2X && head1Y == head2Y) { player1Dies = true; player2Dies = true; }
+
+  if (player1Dies) player1.dead = true;
+  if (twoPlayers && player2Dies) player2.dead = true;
+
+  if (!player1.dead) moveSnake(player1, head1X, head1Y);
+  if (twoPlayers && !player2.dead) moveSnake(player2, head2X, head2Y);
+}
+
+bool gameEnded() {
+  return player1.dead || (twoPlayers && player2.dead);
+}
+
+void drawSnake(Snake& snake, bool filled) {
+  for (int i = 0; i < snake.length; i++) {
+    if (filled) display.fillRect(snake.bodyX[i] * CELL, snake.bodyY[i] * CELL, CELL, CELL, SSD1306_WHITE);
+    else        display.drawRect(snake.bodyX[i] * CELL, snake.bodyY[i] * CELL, CELL, CELL, SSD1306_WHITE);
+  }
+}
+
+// compose la scène entièrement
 void draw() {
   display.clearDisplay();
   display.drawRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, SSD1306_WHITE);
-  display.drawRect(foodX * CELL, foodY * CELL, CELL, CELL, SSD1306_WHITE);
-  for (int i = 0; i < snakeLen; i++)
-    display.fillRect(snakeX[i] * CELL, snakeY[i] * CELL, CELL, CELL, SSD1306_WHITE);
+  display.fillRect(foodX * CELL + 1, foodY * CELL + 1, CELL - 2, CELL - 2, SSD1306_WHITE);
+  drawSnake(player1, true);
+  if (twoPlayers) drawSnake(player2, false);
 
   if (!connected) {
     display.setCursor(2, 2);
     display.print("NO SERVER");
   }
 
-  if (gameOver) {
-    display.fillRect(18, 24, 92, 16, SSD1306_BLACK);
-    display.drawRect(18, 24, 92, 16, SSD1306_WHITE);
-    display.setCursor(24, 28);
-    display.print("GAME OVER  ");
-    display.print(snakeLen - 3);
+  if (gameEnded()) {
+    display.fillRect(6, 24, 118, 16, SSD1306_BLACK);
+    display.drawRect(6, 24, 118, 16, SSD1306_WHITE);
+    display.setFont(&TomThumb);
+    display.setCursor(30, 34);
+    if (!twoPlayers) {
+      display.print("GAME OVER | SCORE : ");
+      display.print(player1.length - 3);
+    } else if (player1.dead && player2.dead) {
+      display.print("EGALITE !");
+    } else if (player1.dead) {
+      display.print("JOUEUR 2 GAGNE !");
+    } else {
+      display.print("JOUEUR 1 GAGNE !");
+    }
+    display.setFont();
   }
   display.display();
 }
 
-void onDirection(String msg) {
-  msg.trim();
-  if (gameOver) { resetGame(); return; }
-  if (msg == "up") setDirection(0, -1);
-  else if (msg == "down") setDirection(0, 1);
-  else if (msg == "left") setDirection(-1, 0);
-  else if (msg == "right") setDirection(1, 0);
+void drawMenu() {
+  display.clearDisplay();
+  display.setFont();
+  display.setCursor(46, 2);
+  display.print("SNAKE");
+  display.setCursor(16, 22);
+  display.print(menuSelection == 0 ? "> 1 joueur" : "  1 joueur");
+  display.setCursor(16, 40);
+  display.print(menuSelection == 1 ? "> 2 joueurs" : "  2 joueurs");
+  display.setFont(&TomThumb);
+  display.setCursor(6, 60);
+  if (!connected) display.print("NO SERVER - lance node server.js");
+  else display.print("Fleches = choisir, Espace = OK");
+  display.setFont();
+  display.display();
+}
+
+void onDirection(String message) {
+  message.trim();
+
+  if (inMenu) {
+    if (message.endsWith(":up")) menuSelection = 0;
+    else if (message.endsWith(":down")) menuSelection = 1;
+    else if (message == "start") { twoPlayers = (menuSelection == 1); resetGame(); inMenu = false; }
+    return;
+  }
+
+  if (gameEnded()) { inMenu = true; return; }
+
+  int colonIndex = message.indexOf(':');
+  if (colonIndex < 0) return;
+  int player = message.substring(0, colonIndex).toInt();
+  String direction = message.substring(colonIndex + 1);
+
+  Snake& snake = (player == 2 && twoPlayers) ? player2 : player1;
+  if (direction == "up") setDirection(snake, 0, -1);
+  else if (direction == "down") setDirection(snake, 0, 1);
+  else if (direction == "left") setDirection(snake, -1, 0);
+  else if (direction == "right") setDirection(snake, 1, 0);
 }
 
 void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
@@ -156,19 +272,22 @@ void setup() {
   delay(2000);
 
   randomSeed(esp_random());
-  resetGame();
 
-  ws.begin(SERVER_HOST, PORT, "/");
-  ws.onEvent(onWsEvent);
-  ws.setReconnectInterval(2000);
-  ws.enableHeartbeat(15000, 3000, 2);
+  webSocket.begin(SERVER_HOST, PORT, "/");
+  webSocket.onEvent(onWsEvent);
+  webSocket.setReconnectInterval(2000);
+  webSocket.enableHeartbeat(15000, 3000, 2);
 }
 
 void loop() {
-  ws.loop();
+  webSocket.loop();
   if (millis() - lastTick >= TICK_MS) {
     lastTick = millis();
-    update();
-    draw();
+    if (inMenu) {
+      drawMenu();
+    } else {
+      gameTick();
+      draw();
+    }
   }
 }
